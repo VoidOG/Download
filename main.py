@@ -4,6 +4,7 @@ from pytube import YouTube
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 import requests
+import http.cookiejar
 
 # Configure logging
 logging.basicConfig(
@@ -21,9 +22,9 @@ def progress_callback(stream, chunk, bytes_remaining, update):
     # Send progress update to the user
     update.message.reply_text(f'Downloaded: {downloaded} of {total_size} bytes ({percent:.2f}%)')
 
-# Function to download YouTube videos using cookies
+# Function to download YouTube videos
 def download_youtube_video(url: str, update: Update) -> str:
-    yt = YouTube(url, on_progress_callback=lambda s, c, b: progress_callback(s, c, b, update), cookies='cookies.txt')
+    yt = YouTube(url, on_progress_callback=lambda s, c, b: progress_callback(s, c, b, update))
     stream = yt.streams.get_highest_resolution()  # Get the highest resolution stream
     output_path = 'downloads/' + stream.default_filename  # Set the output path
     
@@ -39,11 +40,15 @@ def download_instagram_reel(url: str, update: Update) -> str:
     
     # Use requests to get the page content
     session = requests.Session()
-    session.cookies.load('cookies.txt', ignore_discard=True, ignore_expires=True)  # Load Instagram cookies
+    
+    # Load cookies from cookies.txt
+    cookie_jar = http.cookiejar.MozillaCookieJar('cookies.txt')
+    cookie_jar.load('cookies.txt', ignore_expires=True, ignore_discard=True)
+    session.cookies.update(cookie_jar)  # Update session cookies
+    
     response = session.get(url, headers=headers)
     
     # Here you need to parse the response content to get the video URL
-    # This is a simplified example; you may need to adjust this based on the actual HTML structure
     if 'video_url' in response.text:
         video_url = response.text.split('video_url":"')[1].split('"')[0]
         video_path = 'downloads/reel.mp4'  # Set the output path
@@ -90,7 +95,6 @@ def start(update: Update, context: CallbackContext) -> None:
 
 # Video download handler
 def handle_message(update: Update, context: CallbackContext) -> None:
-    # Ensure the bot only responds to its own messages
     if update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id:
         url = update.message.text
         try:
