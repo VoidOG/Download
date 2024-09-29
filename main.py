@@ -1,67 +1,17 @@
-import os
 import logging
-from pytube import YouTube
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
-import requests
-import http.cookiejar
+import youtube_dl
+import os
 
 # Configure logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Function to handle the download progress
-def progress_callback(stream, chunk, bytes_remaining, update):
-    total_size = stream.filesize
-    downloaded = total_size - bytes_remaining
-    percent = (downloaded / total_size) * 100
-    
-    # Send progress update to the user
-    update.message.reply_text(f'Downloaded: {downloaded} of {total_size} bytes ({percent:.2f}%)')
+# Create a folder for downloads if it doesn't exist
+if not os.path.exists('downloads'):
+    os.makedirs('downloads')
 
-# Function to download YouTube videos
-def download_youtube_video(url: str, update: Update) -> str:
-    yt = YouTube(url, on_progress_callback=lambda s, c, b: progress_callback(s, c, b, update))
-    stream = yt.streams.get_highest_resolution()  # Get the highest resolution stream
-    output_path = 'downloads/' + stream.default_filename  # Set the output path
-    
-    # Start the download
-    stream.download(output_path)  # Download the video
-    return output_path  # Return the file path
-
-# Function to download Instagram Reels using cookies
-def download_instagram_reel(url: str, update: Update) -> str:
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.93 Safari/537.36'
-    }
-    
-    # Use requests to get the page content
-    session = requests.Session()
-    
-    # Load cookies from cookies.txt
-    cookie_jar = http.cookiejar.MozillaCookieJar('cookies.txt')
-    cookie_jar.load('cookies.txt', ignore_expires=True, ignore_discard=True)
-    session.cookies.update(cookie_jar)  # Update session cookies
-    
-    response = session.get(url, headers=headers)
-    
-    # Here you need to parse the response content to get the video URL
-    if 'video_url' in response.text:
-        video_url = response.text.split('video_url":"')[1].split('"')[0]
-        video_path = 'downloads/reel.mp4'  # Set the output path
-        
-        # Download the video
-        video_response = session.get(video_url)
-        with open(video_path, 'wb') as video_file:
-            video_file.write(video_response.content)
-        return video_path
-    else:
-        raise Exception("Could not find the video URL in the response.")
-
-# Start command handler
 def start(update: Update, context: CallbackContext) -> None:
     bot_username = context.bot.get_me().username  # Get the bot's username
     
@@ -93,50 +43,54 @@ def start(update: Update, context: CallbackContext) -> None:
         reply_markup=reply_markup
     )
 
-# Video download handler
-def handle_message(update: Update, context: CallbackContext) -> None:
-    if update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id:
-        url = update.message.text
-        try:
-            update.message.reply_text("Starting download...")
-            if 'youtube.com' in url or 'youtu.be' in url:
-                video_path = download_youtube_video(url, update)  # Download the YouTube video
-            elif 'instagram.com' in url:
-                video_path = download_instagram_reel(url, update)  # Download the Instagram Reel
-            else:
-                update.message.reply_text("Unsupported URL. Please provide a YouTube or Instagram link.")
-                return
-            
-            with open(video_path, 'rb') as video_file:
-                update.message.reply_video(video_file, caption="Here is your video!")  # Send the video file
-        except Exception as e:
-            logger.error(f"Error while downloading: {str(e)}")  # Log the error
-            update.message.reply_text(f"Error: {str(e)}")  # Send error message to the user
-    else:
-        update.message.reply_text("Please reply to my message with the YouTube or Instagram video link.")
+def download_video(url: str, update: Update) -> str:
+    options = {
+        'format': 'best',
+        'outtmpl': os.path.join('downloads', '%(title)s.%(ext)s'),  # Save with title
+        'cookiefile': 'cookies.txt',  # Use cookies from the specified file
+        'quiet': False,
+        'progress_hooks': [progress_hook],
+    }
 
-# Error handler
-def error_handler(update: Update, context: CallbackContext) -> None:
-    logger.error(f"Update {update} caused error {context.error}")
-    if update.effective_message:
-        update.effective_message.reply_text("An unexpected error occurred. Please try again later.")
+    def progress_hook(d):
+        if d['status'] == 'downloading':
+            total_size = d.get('total_bytes', 0)
+            downloaded_size = d.get('downloaded_bytes', 0)
+            progress = downloaded_size / total_size * 100 if total_size > 0 else 0
+            logger.info(f'Download progress: {progress:.2f}%')
+    
+    try:
+        with youtube_dl.YoutubeDL(options) as ydl:
+            ydl.download([url])
+        return os.path.join('downloads', f"{ydl.extract_info(url, download=False)['title']}.mp4")
+    except Exception as e:
+        logger.error(f"Error while downloading: {str(e)}")
+        raise e
+
+def handle_message(update: Update, context: CallbackContext) -> None:
+    text = update.message.text
+    if text.startswith("https://") or text.startswith("http://"):
+        try:
+            video_path = download_video(text, update)
+            update.message.reply_video(video=open(video_path, 'rb'))
+            os.remove(video_path)  # Clean up by removing the file after sending
+        except Exception as e:
+            update.message.reply_text(f"Error downloading video: {str(e)}")
+    else:
+        update.message.reply_text("Please send a valid video URL.")
 
 def main() -> None:
-    # Create updater and dispatcher
-    updater = Updater("7488772903:AAGP-ZvbH7K2XzYG9vv-jIsA12iRxTeya3U", use_context=True)
-    dp = updater.dispatcher
+    updater = Updater("7488772903:AAGP-ZvbH7K2XzYG9vv-jIsA12iRxTeya3U")
 
     # Add command handlers
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
-
-    # Add error handler
-    dp.add_error_handler(error_handler)
+    updater.dispatcher.add_handler(CommandHandler("start", start))
+    
+    # Add message handler for group chat
+    updater.dispatcher.add_handler(MessageHandler(Filters.reply & Filters.text, handle_message))
 
     # Start the bot
     updater.start_polling()
     updater.idle()
 
 if __name__ == '__main__':
-    os.makedirs('downloads', exist_ok=True)  # Create downloads folder if it doesn't exist
     main()
