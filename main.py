@@ -1,8 +1,8 @@
 import logging
+import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 import youtube_dl
-import os
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -43,6 +43,13 @@ def start(update: Update, context: CallbackContext) -> None:
         reply_markup=reply_markup
     )
 
+def progress_hook(d):
+    if d['status'] == 'downloading':
+        total_size = d.get('total_bytes', 0)
+        downloaded_size = d.get('downloaded_bytes', 0)
+        progress = downloaded_size / total_size * 100 if total_size > 0 else 0
+        logger.info(f'Download progress: {progress:.2f}%')
+
 def download_video(url: str, update: Update) -> str:
     options = {
         'format': 'best',
@@ -52,13 +59,6 @@ def download_video(url: str, update: Update) -> str:
         'progress_hooks': [progress_hook],
     }
 
-    def progress_hook(d):
-        if d['status'] == 'downloading':
-            total_size = d.get('total_bytes', 0)
-            downloaded_size = d.get('downloaded_bytes', 0)
-            progress = downloaded_size / total_size * 100 if total_size > 0 else 0
-            logger.info(f'Download progress: {progress:.2f}%')
-    
     try:
         with youtube_dl.YoutubeDL(options) as ydl:
             ydl.download([url])
